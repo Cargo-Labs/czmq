@@ -12,13 +12,13 @@
 */
 /*
 @header
-The zclock class provides essential sleep and system time functions, used
-to slow down threads for testing, and calculate timers for polling. Wraps
-the non-portable system calls in a simple portable API.
+    The zclock class provides essential sleep and system time functions,
+    used to slow down threads for testing, and calculate timers for polling.
+    Wraps the non-portable system calls in a simple portable API.
 @discuss
-The Win32 Sleep() call defaults to 16ms resolution unless the system timer
-resolution is increased with a call to timeBeginPeriod() permitting 1ms
-granularity.
+    The Win32 Sleep() call defaults to 16ms resolution unless the system
+    timer resolution is increased with a call to timeBeginPeriod() permitting
+    1ms granularity.
 @end
 */
 
@@ -102,7 +102,7 @@ zclock_time (void)
 int64_t
 zclock_mono (void)
 {
-#if defined (__UTYPE_OSX)
+#if (defined (__UTYPE_OSX) || defined (__UTYPE_IOS))
     clock_serv_t cclock;
     mach_timespec_t mts;
     host_get_clock_service (mach_host_self (), SYSTEM_CLOCK, &cclock);
@@ -140,7 +140,7 @@ zclock_mono (void)
 int64_t
 zclock_usecs (void)
 {
-#if defined (__UTYPE_OSX)
+#if (defined (__UTYPE_OSX) || defined (__UTYPE_IOS))
     clock_serv_t cclock;
     mach_timespec_t mts;
     host_get_clock_service (mach_host_self (), SYSTEM_CLOCK, &cclock);

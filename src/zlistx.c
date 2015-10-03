@@ -19,7 +19,7 @@
     use strdup, strcmp, and zstr_free. To store custom objects, define your
     own duplicator and comparator, and use the standard object destructor.
 @discuss
-    This is a reworking of the simpler zlist container. It is faster to 
+    This is a reworking of the simpler zlist container. It is faster to
     insert and delete items anywhere in the list, and to keep ordered lists.
 @end
 */
@@ -43,7 +43,6 @@ typedef struct _node_t {
 
 struct _zlistx_t {
     node_t *head;                   //  First item in list, if any
-    node_t *tail;                   //  Last item in list, if any
     node_t *cursor;                 //  Current cursors for iteration
     size_t size;                    //  Number of items in list
     czmq_duplicator *duplicator;    //  Item duplicator, if any
@@ -111,8 +110,13 @@ zlistx_new (void)
     zlistx_t *self = (zlistx_t *) zmalloc (sizeof (zlistx_t));
     if (self) {
         self->head = s_node_new (NULL);
-        self->cursor = self->head;
-        self->comparator = s_comparator;
+        if (self->head) {
+            self->cursor = self->head;
+            self->comparator = s_comparator;
+        }
+        else
+            zlistx_destroy (&self);
+
     }
     return self;
 }
@@ -146,7 +150,7 @@ zlistx_add_start (zlistx_t *self, void *item)
 {
     assert (self);
     assert (item);
-    
+
     if (self->duplicator) {
         item = (self->duplicator)(item);
         if (!item)
@@ -175,7 +179,7 @@ zlistx_add_end (zlistx_t *self, void *item)
 {
     assert (self);
     assert (item);
-    
+
     if (self->duplicator) {
         item = (self->duplicator)(item);
         if (!item)
@@ -202,6 +206,31 @@ zlistx_size (zlistx_t *self)
 {
     assert (self);
     return self->size;
+}
+
+
+//  --------------------------------------------------------------------------
+//  Return the item at the head of list. If the list is empty, returns NULL.
+//  Leaves cursor as-is.
+
+void *
+zlistx_head (zlistx_t *self)
+{
+    assert (self);
+    return self->head ? self->head->item : NULL;
+}
+
+
+//  --------------------------------------------------------------------------
+//  Return the item at the tail of list. If the list is empty, returns NULL.
+
+//  Leaves cursor as-is.
+
+void *
+zlistx_tail (zlistx_t *self)
+{
+    assert (self);
+    return self->head ? self->head->prev->item : NULL;
 }
 
 
@@ -276,10 +305,25 @@ zlistx_item (zlistx_t *self)
 //  not pointing to an item.
 
 void *
-zlistx_handle (zlistx_t *self)
+zlistx_cursor (zlistx_t *self)
 {
     assert (self);
     return self->cursor == self->head? NULL: self->cursor;
+}
+
+//  --------------------------------------------------------------------------
+//  Returns the item associated with the given list handle, or NULL if passed
+//  handle is NULL. asserts that the passed in ptr points to a list node.
+
+void *
+zlistx_handle_item (void *handle)
+{
+    if (!handle)
+        return NULL;
+
+    node_t *node = (node_t *) handle;
+    assert (node->tag == NODE_TAG);
+    return node->item;
 }
 
 
@@ -311,7 +355,8 @@ zlistx_find (zlistx_t *self, void *item)
 //  Detach an item from the list, using its handle. The item is not modified,
 //  and the caller is responsible for destroying it if necessary. If handle is
 //  null, detaches the first item on the list. Returns item that was detached,
-//  or null if none was.
+//  or null if none was. If cursor was at item, moves cursor to previous item,
+//  so you can detach items while iterating forwards through a list.
 
 void *
 zlistx_detach (zlistx_t *self, void *handle)
@@ -321,15 +366,17 @@ zlistx_detach (zlistx_t *self, void *handle)
     if (!node)
         node = self->head->next == self->head? NULL: self->head->next;
 
-    //  Now detach node from list, without destroying it
+    //  Now detach node from list, without destroying item
     if (node) {
+        //  Reposition cursor so that delete/detach works during iteration
+        if (self->cursor == node)
+            self->cursor = self->cursor->prev;
         //  Remove node from list
         assert (node->tag == NODE_TAG);
         s_node_relink (node, node->prev, node->next);
         node->tag = 0xDeadBeef;
         void *item = node->item;
         free (node);
-        self->cursor = self->head;
         self->size--;
         return item;
     }
@@ -341,9 +388,24 @@ zlistx_detach (zlistx_t *self, void *handle)
 
 
 //  --------------------------------------------------------------------------
+//  Detach item at the cursor, if any, from the list. The item is not modified,
+//  and the caller is responsible for destroying it as necessary. Returns item
+//  that was detached, or null if none was. Moves cursor to previous item, so
+//  you can detach items while iterating forwards through a list.
+
+void *
+zlistx_detach_cur (zlistx_t *self)
+{
+    return zlistx_detach (self, zlistx_cursor (self));
+}
+
+
+//  --------------------------------------------------------------------------
 //  Delete an item, using its handle. Calls the item destructor is any is
 //  set. If handle is null, deletes the first item on the list. Returns 0
-//  if an item was deleted, -1 if not.
+//  if an item was deleted, -1 if not. If cursor was at item, moves cursor
+//  to previous item, so you can delete items while iterating forwards
+//  through a list.
 
 int
 zlistx_delete (zlistx_t *self, void *handle)
@@ -424,13 +486,13 @@ zlistx_sort (zlistx_t *self)
     //  Uses a comb sort, which is simple and reasonably fast
     //  See http://en.wikipedia.org/wiki/Comb_sort
     assert (self);
-    int gap = self->size;
+    size_t gap = self->size;
     bool swapped = false;
     while (gap > 1 || swapped) {
-        gap = (int) ((double) gap / 1.3);
+        gap = (size_t) ((double) gap / 1.3);
         node_t *base = self->head->next;
         node_t *test = self->head->next;
-        int jump = gap;
+        size_t jump = gap;
         while (jump--)
             test = test->next;
 
@@ -628,13 +690,17 @@ zlistx_test (int verbose)
     zlistx_sort (list);
     assert (zlistx_size (list) == 2);
     void *handle = zlistx_find (list, "hello");
+    char *item1 = (char *) zlistx_item (list);
+    char *item2 = (char *) zlistx_handle_item (handle);
+    assert (item1 == item2);
+    assert (streq (item1, "hello"));
     zlistx_delete (list, handle);
     assert (zlistx_size (list) == 1);
     char *string = (char *) zlistx_detach (list, NULL);
     assert (streq (string, "world"));
     free (string);
     assert (zlistx_size (list) == 0);
-    
+
     //  Check next/back work
     //  Now populate the list with items
     zlistx_add_start (list, "five");
@@ -647,7 +713,7 @@ zlistx_test (int verbose)
     zlistx_add_end   (list, "nine");
     zlistx_add_start (list, "one");
     zlistx_add_end   (list, "ten");
-    
+
     //  Test our navigation skills
     assert (zlistx_size (list) == 10);
     assert (streq ((char *) zlistx_last (list), "ten"));
@@ -682,6 +748,15 @@ zlistx_test (int verbose)
     assert (streq ((char *) zlistx_first (copy), "eight"));
     assert (streq ((char *) zlistx_last (copy), "two"));
     zlistx_destroy (&copy);
+
+    //  Delete items while iterating
+    string = (char *) zlistx_first (list);
+    assert (streq (string, "eight"));
+    string = (char *) zlistx_next (list);
+    assert (streq (string, "five"));
+    zlistx_delete (list, zlistx_cursor (list));
+    string = (char *) zlistx_next (list);
+    assert (streq (string, "four"));
 
     zlistx_purge (list);
     zlistx_destroy (&list);

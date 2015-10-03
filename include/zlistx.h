@@ -23,33 +23,41 @@ extern "C" {
 //  Create a new, empty list.
 CZMQ_EXPORT zlistx_t *
     zlistx_new (void);
-    
+
 //  Destroy a list. If an item destructor was specified, all items in the
 //  list are automatically destroyed as well.
 CZMQ_EXPORT void
     zlistx_destroy (zlistx_t **self_p);
-    
+
 //  Add an item to the head of the list. Calls the item duplicator, if any,
 //  on the item. Resets cursor to list head. Returns an item handle on
 //  success, NULL if memory was exhausted.
 CZMQ_EXPORT void *
     zlistx_add_start (zlistx_t *self, void *item);
-    
+
 //  Add an item to the tail of the list. Calls the item duplicator, if any,
 //  on the item. Resets cursor to list head. Returns an item handle on
 //  success, NULL if memory was exhausted.
 CZMQ_EXPORT void *
     zlistx_add_end (zlistx_t *self, void *item);
-    
+
 //  Return the number of items in the list
 CZMQ_EXPORT size_t
     zlistx_size (zlistx_t *self);
-    
+
+//  Return first item in the list, or null, leaves the cursor
+CZMQ_EXPORT void *
+    zlistx_head (zlistx_t *self);
+
+//  Return last item in the list, or null, leaves the cursor
+CZMQ_EXPORT void *
+    zlistx_tail (zlistx_t *self);
+
 //  Return the item at the head of list. If the list is empty, returns NULL.
 //  Leaves cursor pointing at the head item, or NULL if the list is empty.
 CZMQ_EXPORT void *
     zlistx_first (zlistx_t *self);
-    
+
 //  Return the next item. At the end of the list (or in an empty list),
 //  returns NULL. Use repeated zlistx_next () calls to work through the list
 //  from zlistx_first (). First time, acts as zlistx_first().
@@ -61,7 +69,7 @@ CZMQ_EXPORT void *
 //  backwards from zlistx_last (). First time, acts as zlistx_last().
 CZMQ_EXPORT void *
     zlistx_prev (zlistx_t *self);
-    
+
 //  Return the item at the tail of list. If the list is empty, returns NULL.
 //  Leaves cursor pointing at the tail item, or NULL if the list is empty.
 CZMQ_EXPORT void *
@@ -75,7 +83,12 @@ CZMQ_EXPORT void *
 //  Returns the handle of the item at the cursor, or NULL if the cursor is
 //  not pointing to an item.
 CZMQ_EXPORT void *
-    zlistx_handle (zlistx_t *self);
+    zlistx_cursor (zlistx_t *self);
+
+//  Returns the item associated with the given list handle, or NULL if passed
+//  in handle is NULL. Asserts that the passed in handle points to a list element.
+CZMQ_EXPORT  void *
+    zlistx_handle_item (void *handle);
 
 //  Find an item in the list, searching from the start. Uses the item
 //  comparator, if any, else compares item values directly. Returns the
@@ -86,15 +99,26 @@ CZMQ_EXPORT void *
 //  Detach an item from the list, using its handle. The item is not modified,
 //  and the caller is responsible for destroying it if necessary. If handle is
 //  null, detaches the first item on the list. Returns item that was detached,
-//  or null if none was.
+//  or null if none was. If cursor was at item, moves cursor to previous item,
+//  so you can detach items while iterating forwards through a list.
 CZMQ_EXPORT void *
     zlistx_detach (zlistx_t *self, void *handle);
 
+//  Detach item at the cursor, if any, from the list. The item is not modified,
+//  and the caller is responsible for destroying it as necessary. Returns item
+//  that was detached, or null if none was. Moves cursor to previous item, so
+//  you can detach items while iterating forwards through a list.
+CZMQ_EXPORT void *
+    zlistx_detach_cur (zlistx_t *self);
+
 //  Delete an item, using its handle. Calls the item destructor is any is
-//  set. If handle is null, deletes the first item on the list.
+//  set. If handle is null, deletes the first item on the list. Returns 0
+//  if an item was deleted, -1 if not. If cursor was at item, moves cursor
+//  to previous item, so you can delete items while iterating forwards
+//  through a list.
 CZMQ_EXPORT int
     zlistx_delete (zlistx_t *self, void *handle);
-    
+
 //  Move an item to the start of the list, via its handle.
 CZMQ_EXPORT void
     zlistx_move_start (zlistx_t *self, void *handle);
@@ -107,13 +131,13 @@ CZMQ_EXPORT void
 //  is set.
 CZMQ_EXPORT void
     zlistx_purge (zlistx_t *self);
-    
+
 //  Sort the list. If an item comparator was set, calls that to compare
 //  items, otherwise compares on item value. The sort is not stable, so may
 //  reorder equal items.
 CZMQ_EXPORT void
     zlistx_sort (zlistx_t *self);
-    
+
 //  Create a new node and insert it into a sorted list. Calls the item
 //  duplicator, if any, on the item. If low_value is true, starts searching
 //  from the start of the list, otherwise searches from the end. Use the item
@@ -122,7 +146,7 @@ CZMQ_EXPORT void
 //  list head.
 CZMQ_EXPORT void *
     zlistx_insert (zlistx_t *self, void *item, bool low_value);
-    
+
 //  Move an item, specified by handle, into position in a sorted list. Uses
 //  the item comparator, if any, to determine the new location. If low_value
 //  is true, starts searching from the start of the list, otherwise searches
@@ -140,7 +164,7 @@ CZMQ_EXPORT zlistx_t *
 //  freed when the list is destroyed.
 CZMQ_EXPORT void
     zlistx_set_destructor (zlistx_t *self, czmq_destructor destructor);
-    
+
 //  Set a user-defined duplicator for list items; by default items are not
 //  copied when the list is duplicated.
 CZMQ_EXPORT void

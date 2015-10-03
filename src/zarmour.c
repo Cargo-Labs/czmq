@@ -23,17 +23,26 @@
       - base32
       - base32hex
       - base16
+    * Z85 (http://rfc.zeromq.org/spec:32)
     All RFC4648 base64 and base32 variants support padding the output. The pad
     character is configurable. Default is padding on, with character '='.
     Additionally, in some cases (e.g. MIME), splitting the output into lines of a
     specific length is required. This feature is also supported, though
     turned off by default.
-    Planned features:
-    * z85
+    The z85 mode does neither padding nor line breaks; it is merely a wrapping
+    of the corresponding libzmq methods. Encoding will assert if input length is
+    not divisible by 4 and decoding will assert if input length is not
+    divisible by 5.
 @end
 */
 
 #include "../include/czmq.h"
+
+
+#if (ZMQ_VERSION >= ZMQ_MAKE_VERSION (3, 3, 0))
+#define _INCLUDE_Z85
+#endif
+
 
 //  Structure of our class
 
@@ -48,14 +57,22 @@ struct _zarmour_t {
 
 
 //  Textual names of modes
+#ifdef _INCLUDE_Z85
+const int _NUM_MODES = 6;
+#else
 const int _NUM_MODES = 5;
+#endif
+
 static char
 s_codec_names[][16] = {
-    "base64",
-    "base64url",
-    "base32",
-    "base32hex",
-    "base16"
+      "base64"
+    , "base64url"
+    , "base32"
+    , "base32hex"
+    , "base16"
+#ifdef _INCLUDE_Z85
+    , "z85"
+#endif
 };
 
 
@@ -66,7 +83,8 @@ zarmour_t *
 zarmour_new ()
 {
     zarmour_t *self = (zarmour_t *) zmalloc (sizeof (zarmour_t));
-    assert (self);
+    if (!self)
+        return NULL;
 
     //  Setup default as RFC4648 paragraph 4
     self->mode = ZARMOUR_MODE_BASE64_STD;
@@ -75,6 +93,10 @@ zarmour_new ()
     self->line_breaks = false;
     self->line_length = 72;
     self->line_end = strdup ("\n");
+    if (!self->line_end) {
+        zarmour_destroy (&self);
+        return NULL;
+    }
 
     return self;
 }
@@ -159,6 +181,9 @@ s_base64_encode (const byte *data, size_t length, const char *alphabet, bool pad
     size_t pad_chars = (pad && extra_chars)? 4 - extra_chars: 0;
     size_t str_chars = 4 * (length / 3) + extra_chars + pad_chars;
     char *str = (char *) zmalloc (str_chars + 1);
+    if (!str)
+        return NULL;
+
     char *enc = str;
     const byte *needle = data, *ceiling = data + length;
     while (needle < ceiling) {
@@ -184,14 +209,17 @@ s_base64_encode (const byte *data, size_t length, const char *alphabet, bool pad
 
 
 static byte *
-s_base64_decode (const char *data, size_t *size, const char *alphabet, int linebreakchars)
+s_base64_decode (const char *data, size_t *size, const char *alphabet, size_t linebreakchars)
 {
-    int length = strlen (data);
+    size_t length = strlen (data);
     while (length > 0 && !strchr (alphabet, data[length - 1])) --length;
     const byte *needle = (const byte *) data, *ceiling = (const byte *) (data + length);
     length -= linebreakchars;
     *size = 3 * (length / 4) + ((length % 4)? length % 4 - 1 : 0) + 1;
     byte *bytes = (byte *) zmalloc (*size);
+    if (!bytes)
+        return NULL;
+
     byte *dec = bytes;
     byte i1, i2, i3, i4;
     while (needle < ceiling) {
@@ -234,6 +262,9 @@ s_base32_encode (const byte *data, size_t length, const char *alphabet, bool pad
     size_t pad_chars = (pad && extra_chars)? 8 - extra_chars: 0;
     size_t str_chars = 8 * (length / 5) + extra_chars + pad_chars;
     char *str = (char *) zmalloc (str_chars + 1);
+    if (!str)
+        return NULL;
+
     char *enc = str;
     const byte *needle = data, *ceiling = data + length;
     while (needle < ceiling) {
@@ -271,7 +302,7 @@ s_base32_encode (const byte *data, size_t length, const char *alphabet, bool pad
 
 
 static byte *
-s_base32_decode (const char *data, size_t *size, const char *alphabet, int linebreakchars)
+s_base32_decode (const char *data, size_t *size, const char *alphabet, size_t linebreakchars)
 {
     size_t length = strlen (data);
     while (length > 0 && !strchr (alphabet, _UPPER_CASE(data[length - 1]))) --length;
@@ -288,6 +319,9 @@ s_base32_decode (const char *data, size_t *size, const char *alphabet, int lineb
     }
     *size = 5 * (length / 8) + extra_bytes + 1;
     byte *bytes = (byte *) zmalloc (*size);
+    if (!bytes)
+        return NULL;
+
     byte *dec = bytes;
     byte i1, i2, i3, i4, i5, i6, i7, i8;
     while (needle < ceiling) {
@@ -324,6 +358,9 @@ static char *
 s_base16_encode (const byte *data, size_t length, const char *alphabet)
 {
     char *str = (char *) zmalloc (2 * length + 1);
+    if (!str)
+        return NULL;
+
     char *enc = str;
     const byte *needle = data, *ceiling = data + length;
     while (needle < ceiling) {
@@ -335,13 +372,16 @@ s_base16_encode (const byte *data, size_t length, const char *alphabet)
 }
 
 static byte *
-s_base16_decode (const char *data, size_t *size, const char *alphabet, int linebreakchars)
+s_base16_decode (const char *data, size_t *size, const char *alphabet, size_t linebreakchars)
 {
-    int length = strlen (data);
+    size_t length = strlen (data);
     const byte *needle = (const byte *) data, *ceiling = (const byte *) (data + length);
     length -= linebreakchars;
     *size = length / 2 + 1;
     byte *bytes = (byte *) zmalloc (*size);
+    if (!bytes)
+        return NULL;
+
     byte *dec = bytes;
     byte i1, i2;
     while (needle < ceiling) {
@@ -353,6 +393,43 @@ s_base16_decode (const char *data, size_t *size, const char *alphabet, int lineb
     *dec = 0;
     return bytes;
 }
+
+
+//  ---------------------------------------------------------------------------
+//  z85
+
+#ifdef _INCLUDE_Z85
+static char *
+s_z85_encode (const byte *data, size_t length)
+{
+    assert (data != NULL);
+    assert (length % 4 == 0);
+    char *str = (char *) zmalloc (5 * length / 4 + 1);
+    char *result = zmq_z85_encode (str, (uint8_t *) data, length);
+    if (result == NULL) {
+        free (str);
+        str = NULL;
+    }
+    return str;
+}
+
+static byte *
+s_z85_decode (const char *data, size_t *size)
+{
+    assert (data);
+    assert (size);
+    size_t length = strlen (data);
+    assert (length % 5 == 0);
+    *size = 4 * length / 5 + 1;
+    byte *bytes = (byte *) zmalloc (*size);
+    uint8_t *result = zmq_z85_decode (bytes, (char *) data);
+    if (result == NULL) {
+        free (bytes);
+        bytes = NULL;
+    }
+    return bytes;
+}
+#endif
 
 
 //  Definition of encode method
@@ -380,18 +457,32 @@ zarmour_encode (zarmour_t *self, const byte *data, size_t data_size)
         case ZARMOUR_MODE_BASE16:
             encoded = s_base16_encode (data, data_size, s_base16_alphabet);
             break;
+#ifdef _INCLUDE_Z85
+        case ZARMOUR_MODE_Z85:
+            encoded = s_z85_encode (data, data_size);
+            break;
+#endif
     }
 
+    if (!encoded)
+        return NULL;
+
+#ifdef _INCLUDE_Z85
+    if (self->mode != ZARMOUR_MODE_Z85 &&
+        self->line_breaks && self->line_length > 0 &&
+        strlen (encoded) > self->line_length) {
+#else
     if (self->line_breaks && self->line_length > 0 && strlen (encoded) > self->line_length) {
+#endif
         char *line_end = self->line_end;
-        int nbr_lines = strlen (encoded) / self->line_length;
+        size_t nbr_lines = strlen (encoded) / self->line_length;
         size_t new_length =
             nbr_lines * (self->line_length + strlen (line_end)) +
             strlen (encoded) % self->line_length;
         char *src = encoded;
         char *temp = encoded;
         encoded = (char *) zmalloc (new_length + 1);
-        assert (encoded);
+
         char *dest = encoded;
         while (strlen (src) >= self->line_length) {
             memcpy (dest, src, self->line_length);
@@ -422,7 +513,7 @@ zarmour_decode (zarmour_t *self, const char *data, size_t *decode_size)
     assert (data);
     assert (decode_size);
 
-    int linebreakchars = 0;
+    size_t linebreakchars = 0;
     char *line_end = self->line_end;
     const char *pos = data;
     while ((pos = strstr (pos, line_end))) {
@@ -433,18 +524,18 @@ zarmour_decode (zarmour_t *self, const char *data, size_t *decode_size)
     switch (self->mode) {
         case ZARMOUR_MODE_BASE64_STD:
             return s_base64_decode (data, decode_size, s_base64_alphabet, linebreakchars);
-
         case ZARMOUR_MODE_BASE64_URL:
             return s_base64_decode (data, decode_size, s_base64url_alphabet, linebreakchars);
-
         case ZARMOUR_MODE_BASE32_STD:
             return s_base32_decode (data, decode_size, s_base32_alphabet, linebreakchars);
-
         case ZARMOUR_MODE_BASE32_HEX:
             return s_base32_decode (data, decode_size, s_base32hex_alphabet, linebreakchars);
-
         case ZARMOUR_MODE_BASE16:
             return s_base16_decode (data, decode_size, s_base16_alphabet, linebreakchars);
+#ifdef _INCLUDE_Z85
+        case ZARMOUR_MODE_Z85:
+            return s_z85_decode (data, decode_size);
+#endif
     }
 
     return NULL;
@@ -777,6 +868,34 @@ zarmour_test (bool verbose)
     s_armour_decode (self, "666f6f6261", "fooba", verbose);
     s_armour_decode (self, "666f6f626172", "foobar", verbose);
 
+
+#ifdef _INCLUDE_Z85
+    //  Z85 test is homemade; using 0, 4 and 8 bytes, with precalculated
+    //  test vectors created with a libzmq test.
+    //  ----------------------------------------------------------------
+
+    //  Make a fake curve key from hex (base16) string, making sure
+    //  there are no null bytes inside, so we can use our test utility
+    zarmour_set_mode (self, ZARMOUR_MODE_BASE16);
+    zarmour_set_line_breaks (self, false);
+    size_t key_len;
+    byte *key_data = zarmour_decode (self,
+                                     "4E6F87E2FB6EB22A1EF5E257B75D79124949565F0B8B36A878A4F03111C96E0B",
+                                     &key_len);
+
+    zarmour_set_mode (self, ZARMOUR_MODE_Z85);  //  Z85 mode does not support padding or line breaks
+    zarmour_set_pad (self, false);              //  so these two are superfluous;
+    zarmour_set_line_breaks (self, false);      //  just for consistency
+    if (verbose)
+        zarmour_print (self);
+    s_armour_test (self, "", "", verbose);
+    s_armour_test (self, "foob", "w]zP%", verbose);
+    s_armour_test (self, "foobar!!", "w]zP%vr9Im", verbose);
+    s_armour_test (self, (char *) key_data, "ph+{E}!&X?9}!I]W{sm(nL8@&3Yu{wC+<*-5Y[[#", verbose);
+    free (key_data);
+#endif
+
+    //  Armouring longer byte array to test line breaks
     zarmour_set_pad (self, true);
     zarmour_set_line_breaks (self, true);
     byte test_data[256];
@@ -794,6 +913,10 @@ zarmour_test (bool verbose)
     s_armour_test_long (self, test_data, 256, verbose);
     zarmour_set_mode (self, ZARMOUR_MODE_BASE16);
     s_armour_test_long (self, test_data, 256, verbose);
+#ifdef _INCLUDE_Z85
+    zarmour_set_mode (self, ZARMOUR_MODE_Z85);
+    s_armour_test_long (self, test_data, 256, verbose);
+#endif
 
     zarmour_destroy (&self);
     //  @end
@@ -801,3 +924,7 @@ zarmour_test (bool verbose)
     printf ("OK\n");
     return 0;
 }
+
+#ifdef _INCLUDE_Z85
+#undef _INCLUDE_Z85
+#endif

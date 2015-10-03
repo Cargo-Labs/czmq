@@ -93,6 +93,24 @@ ziflist_new (void)
 }
 
 
+//  Print properties of the ziflist object.
+//  --------------------------------------------------------------------------
+
+void
+ziflist_print (ziflist_t *self)
+{
+    interface_t *iface;
+    for (iface = (interface_t *) zlistx_first ((zlistx_t *) self);
+         iface != NULL;
+         iface = (interface_t *) zlistx_next ((zlistx_t *) self)) {
+        zsys_info (" - interface name : %s", iface->name);
+        zsys_info (" - interface address : %s", iface->address);
+        zsys_info (" - interface netmask : %s", iface->netmask);
+        zsys_info (" - interface broadcast : %s", iface->broadcast);
+    }
+}
+
+
 //  --------------------------------------------------------------------------
 //  Destroy a ziflist instance
 
@@ -137,10 +155,10 @@ ziflist_reload (ziflist_t *self)
         struct ifaddrs *interface = interfaces;
         while (interface) {
             //  On Solaris, loopback interfaces have a NULL in ifa_broadaddr
-            if (  interface->ifa_broadaddr
-               && interface->ifa_addr
-               && interface->ifa_addr->sa_family == AF_INET
-               && s_valid_flags (interface->ifa_flags)) {
+            if (interface->ifa_broadaddr
+            &&  interface->ifa_addr
+            &&  interface->ifa_addr->sa_family == AF_INET
+            &&  s_valid_flags (interface->ifa_flags)) {
                 inaddr_t address = *(inaddr_t *) interface->ifa_addr;
                 inaddr_t netmask = *(inaddr_t *) interface->ifa_netmask;
                 inaddr_t broadcast = *(inaddr_t *) interface->ifa_broadaddr;
@@ -227,10 +245,9 @@ ziflist_reload (ziflist_t *self)
         PIP_ADAPTER_PREFIX pPrefix = cur_address->FirstPrefix;
 
         PWCHAR friendlyName = cur_address->FriendlyName;
-        size_t friendlyLength = 0;
         size_t asciiSize = wcstombs (0, friendlyName, 0) + 1;
         char *asciiFriendlyName = (char *) zmalloc (asciiSize);
-        friendlyLength = wcstombs (asciiFriendlyName, friendlyName, asciiSize);
+        wcstombs (asciiFriendlyName, friendlyName, asciiSize);
 
         bool valid = (cur_address->OperStatus == IfOperStatusUp)
                      && (pUnicast && pPrefix)
@@ -358,10 +375,11 @@ ziflist_test (bool verbose)
     //  @selftest
     ziflist_t *iflist = ziflist_new ();
     assert (iflist);
+
     size_t items = ziflist_size (iflist);
 
     if (verbose) {
-        printf ("ziflist: interfaces=%zu\n", ziflist_size (iflist));
+//        printf ("ziflist: interfaces=%zu\n", ziflist_size (iflist));
         const char *name = ziflist_first (iflist);
         while (name) {
             printf (" - name=%s address=%s netmask=%s broadcast=%s\n",

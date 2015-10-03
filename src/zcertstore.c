@@ -30,7 +30,7 @@
     directly but through the zauth class, which provides a high-level API for
     authentication (and manages certificate stores for you). To actually
     create certificates on disk, use the zcert class in code, or the
-    tools/makecert.c command line tool, or any text editor. The format of a
+    tools/zmakecert.c command line tool, or any text editor. The format of a
     certificate file is defined in the zcert man page.
 @end
 */
@@ -74,6 +74,10 @@ zcertstore_new (const char *location)
         zhashx_set_destructor (self->certs, (czmq_destructor *) zcert_destroy);
         if (location) {
             self->location = strdup (location);
+            if (!self->location) {
+                zcertstore_destroy (&self);
+                return NULL;
+            }
             s_load_certs_from_disk (self);
         }
     }
@@ -93,6 +97,7 @@ s_load_certs_from_disk (zcertstore_t *self)
     if (dir) {
         //  Load all certificates including those in subdirectories
         zfile_t **filelist = zdir_flatten (dir);
+        assert (filelist);
         zrex_t *rex = zrex_new ("_secret$");
         assert (rex);
 
@@ -101,8 +106,8 @@ s_load_certs_from_disk (zcertstore_t *self)
             zfile_t *file = filelist [index];
             if (!file)
                 break;      //  End of list
-            if (  zfile_is_regular (file)
-               && !zrex_matches (rex, zfile_filename (file, NULL))) {
+            if (zfile_is_regular (file)
+            && !zrex_matches (rex, zfile_filename (file, NULL))) {
                 zcert_t *cert = zcert_load (zfile_filename (file, NULL));
                 if (cert)
                     zcertstore_insert (self, &cert);
@@ -149,12 +154,12 @@ zcertstore_lookup (zcertstore_t *self, const char *public_key)
     //  If directory has changed, reload all certificates
     if (self->location) {
         zdir_t *dir = zdir_new (self->location, NULL);
-        if (  dir
-           && (  self->modified != zdir_modified (dir)
-              || self->count != zdir_count (dir)
-              || self->cursize != zdir_cursize (dir))) {
+        if (dir
+        && (self->modified != zdir_modified (dir)
+         || self->count != zdir_count (dir)
+         || self->cursize != zdir_cursize (dir)))
             s_load_certs_from_disk (self);
-        }
+            
         zdir_destroy (&dir);
     }
     return (zcert_t *) zhashx_lookup (self->certs, public_key);

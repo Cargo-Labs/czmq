@@ -61,7 +61,8 @@ zframe_new (const void *data, size_t size)
 
 
 //  --------------------------------------------------------------------------
-//  Constructor; Allocates a new empty (zero-sized) frame
+//  Create an empty (zero-sized) frame. The caller is responsible for
+//  destroying the return value when finished with it.
 
 zframe_t *
 zframe_new_empty (void)
@@ -94,6 +95,17 @@ zframe_destroy (zframe_t **self_p)
 
 
 //  --------------------------------------------------------------------------
+//  Create a frame with a specified string content.
+//  The caller is responsible for destroying the return value when finished with it.
+
+zframe_t *
+zframe_from (const char *string)
+{
+    return zframe_new (string, strlen (string));
+}
+
+
+//  --------------------------------------------------------------------------
 //  Receive frame from socket, returns zframe_t object or NULL if the recv
 //  was interrupted. Does a blocking recv, if you want to not block then use
 //  zpoller or zloop.
@@ -109,7 +121,7 @@ zframe_recv (void *source)
             zframe_destroy (&self);
             return NULL;            //  Interrupted or terminated
         }
-        self->more = zsock_rcvmore (handle);
+        self->more = zsock_rcvmore (source);
     }
     return self;
 }
@@ -130,8 +142,8 @@ zframe_send (zframe_t **self_p, void *dest, int flags)
         zframe_t *self = *self_p;
         assert (zframe_is (self));
 
-        int send_flags = (flags & ZFRAME_MORE) ? ZMQ_SNDMORE : 0;
-        send_flags |= (flags & ZFRAME_DONTWAIT) ? ZMQ_DONTWAIT : 0;
+        int send_flags = (flags & ZFRAME_MORE)? ZMQ_SNDMORE: 0;
+        send_flags |= (flags & ZFRAME_DONTWAIT)? ZMQ_DONTWAIT: 0;
         if (flags & ZFRAME_REUSE) {
             zmq_msg_t copy;
             zmq_msg_init (&copy);
@@ -143,13 +155,34 @@ zframe_send (zframe_t **self_p, void *dest, int flags)
             }
         }
         else {
-            int rc = zmq_sendmsg (handle, &self->zmsg, send_flags);
-            zframe_destroy (self_p);
-            if (rc == -1)
-                return rc;
+            if (zmq_sendmsg (handle, &self->zmsg, send_flags) >= 0)
+                zframe_destroy (self_p);
+            else
+                return -1;
         }
     }
     return 0;
+}
+
+//  --------------------------------------------------------------------------
+//  Send frame to server socket, copy routing id from source message, destroy
+//  after sending unless ZFRAME_REUSE is set or the attempt to send the
+//  message errors out.
+
+int
+zframe_send_reply (zframe_t **self_p, zframe_t *source_msg, void *dest, int flags)
+{
+#if defined ZMQ_SERVER
+    assert (dest);
+    assert (self_p);
+    assert (source_msg);
+
+    zframe_set_routing_id (*self_p, zframe_routing_id (source_msg));
+
+    return zframe_send (self_p, dest, flags);
+#else
+    return -1;
+#endif
 }
 
 //  --------------------------------------------------------------------------
@@ -210,6 +243,8 @@ zframe_strhex (zframe_t *self)
     size_t size = zframe_size (self);
     byte *data = zframe_data (self);
     char *hex_str = (char *) malloc (size * 2 + 1);
+    if (!hex_str)
+        return NULL;
 
     uint byte_nbr;
     for (byte_nbr = 0; byte_nbr < size; byte_nbr++) {
@@ -233,8 +268,10 @@ zframe_strdup (zframe_t *self)
 
     size_t size = zframe_size (self);
     char *string = (char *) malloc (size + 1);
-    memcpy (string, zframe_data (self), size);
-    string [size] = 0;
+    if (string) {
+        memcpy (string, zframe_data (self), size);
+        string [size] = 0;
+    }
     return string;
 }
 
@@ -248,8 +285,8 @@ zframe_streq (zframe_t *self, const char *string)
     assert (self);
     assert (zframe_is (self));
 
-    if (  zframe_size (self) == strlen (string)
-       && memcmp (zframe_data (self), string, strlen (string)) == 0)
+    if (zframe_size (self) == strlen (string)
+    && memcmp (zframe_data (self), string, strlen (string)) == 0)
         return true;
     else
         return false;
@@ -286,6 +323,39 @@ zframe_set_more (zframe_t *self, int more)
 
 
 //  --------------------------------------------------------------------------
+//  Return frame routing id, set when reading frame from server socket
+//  or by the zframe_set_routing_id() method.
+
+size_t
+zframe_routing_id (zframe_t *self)
+{
+#if defined ZMQ_SERVER
+    assert (self);
+    assert (zframe_is (self));
+    return zmq_msg_routing_id (&self->zmsg);
+#else
+    return 0;
+#endif
+}
+
+
+//  --------------------------------------------------------------------------
+//  Set frame routing id. Only relevant when sending to server socket.
+
+void
+zframe_set_routing_id (zframe_t *self, size_t routing_id)
+{
+#if defined ZMQ_SERVER
+    assert (self);
+    assert (zframe_is (self));
+
+    int rc = zmq_msg_set_routing_id (&self->zmsg, routing_id);
+    assert (rc==0);
+#endif
+}
+
+
+//  --------------------------------------------------------------------------
 //  Return true if two frames have identical size and data
 
 bool
@@ -297,10 +367,10 @@ zframe_eq (zframe_t *self, zframe_t *other)
         assert (zframe_is (self));
         assert (zframe_is (other));
 
-        if (  zframe_size (self) == zframe_size (other)
-           && memcmp (zframe_data (self),
-                      zframe_data (other),
-                      zframe_size (self)) == 0)
+        if (zframe_size (self) == zframe_size (other)
+        &&  memcmp (zframe_data (self),
+                    zframe_data (other),
+                    zframe_size (self)) == 0)
             return true;
         else
             return false;
@@ -345,8 +415,8 @@ zframe_print (zframe_t *self, const char *prefix)
             is_bin = 1;
 
     char buffer [256] = "";
-    snprintf (buffer, 30, "%s[%03d] ", prefix ? prefix : "", (int) size);
-    size_t max_size = is_bin ? 35 : 70;
+    snprintf (buffer, 30, "%s[%03d] ", prefix? prefix: "", (int) size);
+    size_t max_size = is_bin? 35: 70;
     const char *ellipsis = "";
     if (size > max_size) {
         size = max_size;
@@ -391,7 +461,7 @@ zframe_recv_nowait (void *source)
             zframe_destroy (&self);
             return NULL;            //  Interrupted or terminated
         }
-        self->more = zsock_rcvmore (handle);
+        self->more = zsock_rcvmore (source);
     }
     return self;
 }
@@ -420,7 +490,7 @@ zframe_fprint (zframe_t *self, const char *prefix, FILE *file)
             is_bin = 1;
 
     fprintf (file, "[%03d] ", (int) size);
-    size_t max_size = is_bin ? 35 : 70;
+    size_t max_size = is_bin? 35: 70;
     const char *ellipsis = "";
     if (size > max_size) {
         size = max_size;
@@ -513,6 +583,38 @@ zframe_test (bool verbose)
 
     zsock_destroy (&input);
     zsock_destroy (&output);
+
+#if ZMQ_VERSION_MAJOR >= 4 && ZMQ_VERSION_MINOR >= 2
+
+    //  Create server and client sockets and connect over inproc
+    zsock_t *server = zsock_new_server ("@inproc://zframe-server.test");
+    assert (server);
+    zsock_t *client = zsock_new_client (">inproc://zframe-server.test");
+    assert (client);
+
+    //  Send message from client to server
+    frame = zframe_new ("Hello", 5);
+    assert (frame);
+    rc = zframe_send (&frame, client, 0);
+    assert (rc == 0);
+
+    //  Read message
+    frame = zframe_recv (server);
+    assert (zframe_streq (frame, "Hello"));
+    zframe_t *reply_frame = zframe_new("Reply", 5);
+    rc = zframe_send_reply(&reply_frame, frame, server, 0);
+    assert(rc == 0);
+    zframe_destroy(&frame);
+
+    //  Read reply
+    frame = zframe_recv (client);
+    assert (zframe_streq (frame, "Reply"));
+    zframe_destroy(&frame);
+
+    zsock_destroy (&client);
+    zsock_destroy (&server);
+
+#endif
 
     //  @end
     printf ("OK\n");

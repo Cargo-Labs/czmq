@@ -28,16 +28,14 @@
 #include "platform.h"
 #include "../include/czmq.h"
 
-#if (defined (__WINDOWS__))
-#define in_addr_t uint32_t
-#endif
+//  Constants
+#define INTERVAL_DFLT  1000         //  Default interval = 1 second
 
 //  --------------------------------------------------------------------------
 //  The self_t structure holds the state for one actor instance
 
 typedef struct {
     zsock_t *pipe;              //  Actor command pipe
-    zpoller_t *poller;          //  Socket poller
     SOCKET udpsock;             //  UDP socket for send/recv
     int port_nbr;               //  UDP port number we work on
     int interval;               //  Beacon broadcast interval
@@ -56,7 +54,6 @@ s_self_destroy (self_t **self_p)
     assert (self_p);
     if (*self_p) {
         self_t *self = *self_p;
-        zpoller_destroy (&self->poller);
         zframe_destroy (&self->transmit);
         zframe_destroy (&self->filter);
         zsys_udp_close (self->udpsock);
@@ -71,11 +68,7 @@ s_self_new (zsock_t *pipe)
     self_t *self = (self_t *) zmalloc (sizeof (self_t));
     if (!self)
         return NULL;
-
     self->pipe = pipe;
-    self->poller = zpoller_new (self->pipe, NULL);
-    if (!self->poller)
-        s_self_destroy (&self);
     return self;
 }
 
@@ -94,7 +87,7 @@ s_self_prepare_udp (self_t *self)
     self->udpsock = zsys_udp_new (false);
     if (self->udpsock == INVALID_SOCKET)
         return;
-    
+
     //  Get the network interface fro ZSYS_INTERFACE or else use first
     //  broadcast interface defined on system. ZSYS_INTERFACE=* means
     //  use INADDR_ANY + INADDR_BROADCAST.
@@ -119,8 +112,8 @@ s_self_prepare_udp (self_t *self)
                 send_to = inet_addr (ziflist_broadcast (iflist));
                 bind_to = inet_addr (ziflist_address (iflist));
                 if (self->verbose)
-                    zsys_info ("zbeacon: using address=%s broadcast=%s",
-                               ziflist_address (iflist), ziflist_broadcast (iflist));
+                    zsys_info ("zbeacon: interface=%s address=%s broadcast=%s",
+                               name, ziflist_address (iflist), ziflist_broadcast (iflist));
                 break;      //  iface is known, so allow it
             }
             name = ziflist_next (iflist);
@@ -146,7 +139,7 @@ s_self_prepare_udp (self_t *self)
         if (bind (self->udpsock, (struct sockaddr *) &sockaddr, sizeof (inaddr_t)))
             zsys_socket_error ("bind");
 
-        //  Send our hostname back to API
+        //  Get our hostname so we can send it back to the API
         if (getnameinfo ((struct sockaddr *) &address, sizeof (inaddr_t),
                           self->hostname, NI_MAXHOST, NULL, 0, NI_NUMERICHOST) == 0) {
             if (self->verbose)
@@ -200,6 +193,8 @@ s_self_handle_pipe (self_t *self)
         zframe_destroy (&self->transmit);
         zsock_recv (self->pipe, "fi", &self->transmit, &self->interval);
         assert (zframe_size (self->transmit) <= UDP_FRAME_MAX);
+        if (self->interval == 0)
+            self->interval = INTERVAL_DFLT;
         //  Start broadcasting immediately
         self->ping_at = zclock_mono ();
     }

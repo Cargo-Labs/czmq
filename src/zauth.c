@@ -131,7 +131,8 @@ s_self_handle_pipe (self_t *self)
         char *filename = zmsg_popstr (request);
         zhashx_destroy (&self->passwords);
         self->passwords = zhashx_new ();
-        zhashx_load (self->passwords, filename);
+        if (zhashx_load (self->passwords, filename) && self->verbose)
+            zsys_info ("zauth: could not load file=%s", filename);
         zstr_free (&filename);
         zsock_signal (self->pipe, 0);
     }
@@ -328,8 +329,8 @@ s_authenticate_curve (self_t *self, zap_request_t *request)
         return true;
     }
     else
-    if (  self->certstore
-       && zcertstore_lookup (self->certstore, request->client_key)) {
+    if (self->certstore
+    &&  zcertstore_lookup (self->certstore, request->client_key)) {
         if (self->verbose)
             zsys_info ("zauth: - allowed (CURVE) client_key=%s", request->client_key);
         return true;
